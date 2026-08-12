@@ -1,4 +1,4 @@
-﻿# Eidoverse — Agent Guide
+# Eidoverse — Agent Guide
 
 Eidoverse is a collection of useful tools for **creating and rendering
 three.js videos in Deno, at real-time speeds, with absolutely minimal CPU
@@ -398,7 +398,7 @@ piece and a render test.
    - `placeOn(obj, target, { xz, yOffset, xzOffset })` — sit obj's
      bbox-bottom on target's top surface AND center obj's bbox at the xz
      anchor (both axes are bbox-corrected, so an off-center loader pivot
-     is handled). ⚠ The default `xz: 'centered'`
+     no longer lands the model sideways). ⚠ The default `xz: 'centered'`
      means the TARGET'S center — `obj.position.set(...)` before a bare
      `placeOn(obj, floor)` is silently DISCARDED and every prop piles up
      at the floor's center (the "furniture blob"). Pass your spot
@@ -519,7 +519,8 @@ piece and a render test.
      the waypoints AND yaws it to face its travel direction — coupled, so it
      can never slide sideways. Never animate a vehicle with a bare
      `obj.position.x = lerp(...)`: the model travels perpendicular to its own
-     wheels unless its nose happens to align with that axis. The
+     wheels unless its nose happens to align with that axis (the sideways-
+     vehicle bug — a 75-second video of a vehicle drifting broadside). The
      render audit flags this (`[motion] ⚠ RE-RENDER — travelled sideways`);
      intentional lateral slides (conveyor, crab) opt out with
      `obj.userData.noMotionCheck = true`. **Opt-outs are logged by name at
@@ -614,7 +615,7 @@ piece and a render test.
    if (spot) bench.position.copy(spot);
    ```
 
-   **Placement anti-patterns:**
+   **Placement anti-patterns (these are real failures that have shipped):**
 
    - **Never write `obj.position.x/.z = …` after a place helper.** The
      helper centers the object's *bounding box* at the anchor; a raw
@@ -638,7 +639,7 @@ piece and a render test.
 
    `placeOn(item, shelf)` snaps to the shelf unit's OUTER TOP, not an
    interior board — and hand-guessing each board's Y/Z drops the books
-   *inside* the carcass. Instead, drop onto the actual
+   *inside* the carcass (a shipped bug). Instead, drop onto the actual
    board surface with `snapToGround`, which raycasts down from the item's
    current xz against the shelf's own meshes:
 
@@ -753,8 +754,11 @@ straight on `globalThis.ASSETS[key]` (no base64 round-trip).
 `globalThis.b64toArrayBuffer(ASSETS.key)` still works — it passes that
 `Uint8Array` through to an `ArrayBuffer` — so
 `loader.parse(globalThis.b64toArrayBuffer(ASSETS.x))` is the universal
-pattern for GLB / VRM / HDR. (Point the `hdri` asset at `hdri.hdr` itself — handing the loader base64
-text instead of HDR bytes yields "no header found".)
+pattern for GLB / VRM / HDR. (The `fetch_*` scripts still emit a
+`*_b64.txt` sidecar for legacy reasons; ignore it and point at the raw
+file. Pointing the `hdri` asset at `hdri_b64.txt` and then parsing it
+yields "no header found" — you'd be handing the loader base64 text, not
+the HDR bytes.)
 
 JS — minimum scene shape, no assumptions about content:
 
@@ -806,7 +810,8 @@ HDRIs are designed to be a global light source, not a backdrop —
 using one as the visible sky gives a flat 360 photo behind everything.
 
 ```js
-// HDRLoader. The `hdri` asset points at the RAW hdri.hdr (see "Asset injection is RAW BYTES" above).
+// HDRLoader (RGBELoader is deprecated in three 0.184). The `hdri` asset
+// points at the RAW hdri.hdr (see "Asset injection is RAW BYTES" above).
 const { HDRLoader } = await import('npm:three@0.184.0/addons/loaders/HDRLoader.js');
 const hdr = new HDRLoader().parse(globalThis.b64toArrayBuffer(globalThis.ASSETS.hdri));
 // 1) CPU row-flip — DataTexture.flipY is IGNORED on WebGPU; without this the
@@ -880,7 +885,7 @@ pick one** (same as fetched props):
   **The outfit is built in LAYERS** — mesh names `jacket`, `tie`, `shirt`, `pants`, `shoes`:
   hide layers to change the look (jacket + tie off = casual shirtsleeves):
   `vrm.scene.traverse(o => { if (o.name === 'jacket' || o.name === 'tie') o.visible = false; })`
-- `claude.vrm` — a lightweight Claude stand-in; `claude_suit.vrm` is the primary model
+- `claude.vrm` — a legacy lightweight Claude stand-in; prefer `claude_suit.vrm`
 
 Any other `.vrm` you drop into `eidoverse/assets/vrms/` works the same
 way. Point `config.assets` at the VRM **where it lives** — e.g.
@@ -1258,8 +1263,8 @@ simple, correct path is to put it in `collisionMeshes`.)*
 
 With ANY of these the controller owns the mixer, the root transform, AND the feet:
 - Do **NOT** pre-play idle (`playVRMADefault('idle')`) before/under it — a
-  pre-played action stays at weight 1 and blends over every clip it plays,
-  so the legs drag and no walk animation shows.
+  pre-played action stays at weight 1 and blends over every clip it plays
+  (the recurring "legs drag around, no walk animation" bug).
 - Do **NOT** call `mixer.update(dt)` / `vrm.update(dt)` yourself (it does).
 - Do **NOT** write `vrm.scene.position` / `.rotation.y` per frame — read
   position via `getPosition()`; face the camera only when stationary via the
@@ -1412,7 +1417,7 @@ is the cause:
 - `WIDTH`, `HEIGHT`, `FPS`, `DURATION`, `TOTAL_FRAMES`
 - `canvas`, `GPU_ADAPTER`, `GPU_DEVICE`
 - `ASSETS[key]` — raw `Uint8Array` bytes keyed by your `assets` map
-- `b64toArrayBuffer(x)` → ArrayBuffer (passes Uint8Array through; decodes base64 strings)
+- `b64toArrayBuffer(x)` → ArrayBuffer (passes Uint8Array through; decodes legacy base64 strings)
 
 ### Three.js
 - `THREE` — three@0.184.0 (WebGPU build + TSL)
@@ -1460,7 +1465,7 @@ from moving → emoting, let the controller run out of waypoints (or call
 
 **Sitting clips available** (in `assets/animations/`): `sitting_normal_chair` + `sitting_nervous_arm_rub_chair` (chair — use via `seatOn`), `sitting_on_ground` (cross-legged) + `sit_laying_on_ground` (lying down) (floor — use via `sitOnGround`). Match the clip to the surface: chair clips need a chair, floor clips need the floor.
 
-**Multiple characters — just animate each; the engine drives them all.** Load each VRM, then call `playVRMADefault` / `seatOn` / `sitOnGround` / the controller per VRM. The render loop updates EVERY loaded VRM's mixer **and** `vrm.update()` every frame (one mixer per VRM — replaying a clip on a VRM replaces its previous mixer, so idle+sit can't both play). Do **NOT** hand-roll mixer management for multi-VRM scenes — capturing mixers into your own vars, nulling `globalThis._mixer` between loads, or updating `_mixer1`/`_mixer2` in `renderFrame`. Each `seatOn`/`playVRMADefault` call is self-sufficient.
+**Multiple characters — just animate each; the engine drives them all.** Load each VRM, then call `playVRMADefault` / `seatOn` / `sitOnGround` / the controller per VRM. The render loop updates EVERY loaded VRM's mixer **and** `vrm.update()` every frame (one mixer per VRM — replaying a clip on a VRM replaces its previous mixer, so idle+sit can't both play). Do **NOT** hand-roll mixer management for multi-VRM scenes — capturing mixers into your own vars, nulling `globalThis._mixer` between loads, or updating `_mixer1`/`_mixer2` in `renderFrame`. That old workaround leaves the 2nd character standing in its chair or sunk through the seat (only one VRM got driven). Each `seatOn`/`playVRMADefault` call is self-sufficient.
 
 **Lip-sync when a VRM speaks.** If you lay TTS in a character's voice, drive the mouth: `lipsync.py` → `get_viseme_timeline(vocals.wav, fps)`, then per frame set `vrm.expressionManager` visemes (`aa`/`ih`/`ou`/`ee`/`oh`) + occasional `blink` and `em.update()`. Voice over a frozen mouth reads as broken.
 
@@ -1555,8 +1560,8 @@ const screen = globalThis.makeScreen({
 screen.mesh.position.set(0, 1.4, -2);  scene.add(screen.mesh);
 ```
 
-Do NOT hand-build CanvasTexture screens in scenes — this helper IS that
-pattern, done right. Full-frame HUDs / lower thirds still go through
+Do NOT hand-build CanvasTexture screens in scenes anymore — this helper IS
+that pattern, done right. Full-frame HUDs / lower thirds still go through
 `makeOverlayLayer` (screen-locked); screen-space glitch/CRT looks are still
 `CustomEffectsDeno`'s job, never faked inside `draw()`.
 
@@ -1702,7 +1707,7 @@ bot.detach('left');                            // returns the module — re-add 
   living BONES that `RoboticsKit.connect()` accepts — use them directly
   for full manual control.
 
-**Robot scene direction:**
+**Robot scene direction — hero-reel lessons (hard-won, follow these):**
 - SHOW the beat ON CAMERA: schedule pick/assembly moments to land inside the
   camera's framing, then VERIFY by extracting frames at those exact times —
   a log line saying it happened is not a shot of it happening. Hold a static
@@ -1942,8 +1947,8 @@ const wild = globalThis.makeCreature(makeCreature.random(42));
 ⚠ **PROBE WARM-UP — creatures look BROKEN at frame 0, not just dark.** A
 creature's gait and foot-plants assemble over the first ~1-2 seconds; at
 frame 0 the body renders as scattered spheres with a detached floating
-head — which looks exactly like a catastrophic skinning/engine bug.
-Shadow maps and pipelines also
+head — which looks exactly like a catastrophic skinning/engine bug and
+has sent real builds on false bug hunts. Shadow maps and pipelines also
 settle over the first frames (a t=0 probe can look black), and particle
 systems start clumped at their emitters. NEVER judge creatures,
 particles, or lighting from a single frame-0 probe: render ≥1.5s and
@@ -1985,7 +1990,7 @@ const wall = new THREE.Mesh(geo, globalThis.createParallaxMaterial({
 wall.castShadow = wall.receiveShadow = true;  scene.add(wall);
 ```
 
-The material is a real **lit `MeshStandardNodeMaterial`** — the relief is lit, self-shadowed (a second march toward `lightDir`), and its **shading normal is derived from the height field by default** (`heightNormal:true`), so it shades like geometry with NO normal map needed. It also sets `maskShadowNode` so cast shadows follow the carved outline; `createReliefColumn` additionally enables the relief self-shadow mode so recesses shadow themselves. `computeTangents()` is mandatory (POM marches in tangent space) — as a safety net, the helper audits the scene at first render: a POM mesh with no tangents gets them auto-computed (the warning names the mesh), and when they can't be computed (merged non-indexed geometry) the relief shading normal is disabled instead of miscompiling into an invisible mesh (`THREE.Node: Recursion detected` on a POM surface means exactly this). It also warns on `curvedSilhouette` without `inflate` and other footguns — read the warnings; they name the exact fix. (Never `MeshBasicNodeMaterial` — it renders all-black under the march.)
+The material is a real **lit `MeshStandardNodeMaterial`** — the relief is lit, self-shadowed (a second march toward `lightDir`), and its **shading normal is derived from the height field by default** (`heightNormal:true`), so it shades like geometry with NO normal map needed. It also sets `maskShadowNode` so cast shadows follow the carved outline; `createReliefColumn` additionally enables the relief self-shadow mode so recesses shadow themselves. `computeTangents()` is mandatory (POM marches in tangent space) — as a safety net, the helper audits the scene at first render: a POM mesh with no tangents gets them auto-computed (the warning names the mesh), and when they can't be computed (merged non-indexed geometry) the relief shading normal is disabled instead of miscompiling into an invisible mesh (`THREE.Node: Recursion detected` on a POM surface means exactly this). It also warns on `curvedSilhouette` without `inflate` and other footguns — read the warnings; they name the exact fix. (`selfLit`/`lambert` remain legacy unlit escape hatches; never `MeshBasicNodeMaterial` — it renders all-black under the march.)
 
 **How to EVALUATE a SPOM render (or you'll ship plain POM by mistake):** pull the camera BACK so the whole object, its silhouette against the background, AND its floor shadow are all in frame; put it in a LIT scene with a real floor; ORBIT so the silhouette sweeps. A zoomed-in, barely-moving shot of a dark panel proves nothing. On a curved surface, confirm the relief peaks visibly **bulge past** the round base outline.
 
@@ -1999,7 +2004,7 @@ or a sine-displaced mesh.** These read with true depth and motion:
 - **Sky + clouds** → the WORLD-SPACE SKY SYSTEM (`makeSkySystem`, full
   section below) — cloud types, time-of-day, sun/moon/stars, day cycles.
 - **RAIN / STORMS** → the WEATHER SYSTEM (`makeWeatherSystem`, same
-  section) — states from fair to darkstorm with world-anchored rain,
+  section) — states from drizzle to darkstorm with world-anchored rain,
   wet surfaces + puddles, from-the-clouds lightning, and smooth
   agent-directable transitions. Add `rain_on_camera` (LENS rain —
   screen-locked refracting droplets + wet blur) on top only when the
@@ -2048,7 +2053,7 @@ const bolt = await globalThis.loadImageTexture(ASSETS.bolt_trace, {});          
 const drop = await globalThis.loadImageTexture(ASSETS.rain_drop, { srgb: true }); // eidoverse/assets/sky/rain_streak.png
 const weather = await globalThis.makeWeatherSystem({ scene, sky, opts: { textures: { bolt, drop } } });
 weather.wrapScene();                       // wet-darkening + puddles + cloud shadows on scene materials
-weather.setWeather('storm', 1);            // clear|fair|sunshower|overcast|rain|storm|cyclone|darkstorm
+weather.setWeather('storm', 1);            // clear|drizzle|sunshower|overcast|rain|storm|hurricane|noreaster|darkstorm
 sun.intensity *= weather.sunDim();
 // per frame: weather.update(t, camera)  — REQUIRED (rain, lightning, greying)
 ```
@@ -2065,67 +2070,6 @@ sun.intensity *= weather.sunDim();
   suppression leaves their env-IBL alone.
 - Scene lights should re-apply per frame during transitions/cycles:
   `sky.applyToLights(...)` then `sun.intensity *= weather.sunDim()`.
-
-### PICK A PACKAGE — the skies are whole looks, not parts bins
-
-Every sky is a **wholesale, dialed-in look-dev package**. Select one; do not
-assemble your own out of the internals. The engine exposes seams (a celestial
-hook, palette tints, cloud phase terms) because the packages are built on
-them — they are not a menu for inventing a fourth world, and recombining
-them is how you get a sky that reads broken.
-
-**Three worlds** — the complete set (names as they appear in Eanpa):
-
-| key | world |
-|---|---|
-| `earth` | Earth |
-| `ringworld` | Orbital / Halo |
-| `shieldworld` | Earth 5129323011 CE (Red Giant) — far-future Earth under the expanded Sun, behind a hex shield |
-
-Two of the three ARE Earth. `shieldworld` is not an alien planet — it is this
-planet, five billion years on, under a hex shield. Its star fills roughly a
-third of the sky and its surface visibly churns, so give it room in frame.
-
-**Four cloud types:** `clear` · `cumulus` · `stratus` · `cirrus`
-**Eight weather states:** `clear` · `fair` · `sunshower` · `overcast` ·
-`rain` · `storm` · `cyclone` · `darkstorm`
-
-### COLOUR OVERRIDES — retint a package, don't rebuild it
-
-These are the ONLY sanctioned way to deviate from an authored look. Each is a
-per-channel multiplier that applies *after* the preset has driven its value,
-so it retints the dialed-in look and everything else (lightning coupling, sky
-response, day-cycle timing) still reads through. Omit one to keep the
-authored colour; `[1, 1, 1]` is the identity.
-
-```js
-// at construction
-const sky = await globalThis.makeSkySystem({ scene, textures: { stars },
-    opts: { hours: 15, clouds: 'cumulus',
-            cloudColor: [1.0, 0.72, 0.55],       // cloud body tint
-            sunColor:   [1.0, 0.85, 0.70] } });  // star light + disc
-const weather = await globalThis.makeWeatherSystem({ scene, sky,
-    opts: { textures: { bolt, drop },
-            rainColor: [1.6, 0.55, 0.35] } });   // streaks + splashes
-
-// or live, any time
-sky.setColors({ cloud: [...], sun: [...], star: [...], shield: [...] });
-weather.setColors({ rain: [...] });
-sky.getColors(); weather.getColors();            // read current multipliers
-```
-
-- `rainColor` — precipitation streaks and splashes.
-- `cloudColor` — cloud body lighting.
-- `sunColor` — the star's light and disc.
-- `star` — **shieldworld only**: retints the red giant's own surface. The
-  granulation, convection cells, hot patch and limb keep their structure;
-  only the hue moves. Push blue for a hotter star, red for cooler.
-- `shield` — **shieldworld only**: the hex shield lattice. Values above 1 are
-  intentional, it is emissive; the authored cyan is `[0.38, 0.95, 1.3]`.
-
-`star` and `shield` route to the celestial module, which registers itself
-during `rg.attach({ scene, sky })` — so **call them after attach**, or they
-silently no-op.
 
 **`sdf_raymarch_loader`** — raymarched 3D objects PLACED in the scene (at a
 position, occluding/occluded by other geometry — unlike the screenspace
@@ -2616,8 +2560,9 @@ The character DOES THINGS — walks through environments, turns to face camera, 
 
 ## Pre-render self-scan — grep before you waste a render
 
-Run these against your `scene.js` before the first full render. Fix any
-matches and re-scan.
+Run these against your `scene.js` before the first full render. Each
+catches a failure mode that has eaten thousands of frames in past
+sessions. Fix any matches and re-scan.
 
 ```bash
 SC=work/<id>/scene.js
@@ -2801,7 +2746,8 @@ renderer default but recovers some detail.
 
 ## Hard rules & anti-patterns (the "why" collection)
 
-Most have deep-dive sections above; this is the checklist form.
+Codified from real shipped failures. Most have deep-dive sections above;
+this is the checklist form.
 
 - **The deliverable is a 3D SCENE — never a slideshow of images on planes.**
   Web images are encouraged AS MATERIAL (textures on walls/posters/screens,
@@ -2866,6 +2812,8 @@ Most have deep-dive sections above; this is the checklist form.
   shapes. A scene with ZERO fetched models is almost always a placeholder.
 - **Mirrored / flipped text** → you took the `getImageData`→`DataTexture`
   path. Use `CanvasTexture`; orient the plane, don't flip pixels.
+- **Re-reading these docs beats re-discovering the bug.** Every rule here
+  was paid for in broken renders.
 
 ## When stuck
 
